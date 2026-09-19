@@ -1,0 +1,82 @@
+#+title: Інструмент ~comments~
+
+Повертає коментарі файлу гілками: кореневий коментар із номером, датою, станом (відкритий чи закритий) і
+вузлом, до якого його прив'язано, а під ним — відповіді (~parent_id~ відповіді дорівнює ~id~
+кореня). Коментар прив'язаний до вузла верхнього рівня, а не до екрана, — розкладання по екранах за
+координатами (~client_meta.node_offset~) залишається окремою задачею. Ім'я автора не виводиться. Опис для
+~tools/list~ і диспетчеризація — в [[file:main-tools.org][~main-tools.org~]].
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/tools/comments.rs
+  <<Декларації>>
+
+  <<Визначення>>
+
+  pub async fn run(http: &reqwest::Client, arguments: &serde_json::Value) -> serde_json::Value {
+      <<Дії>>
+  }
+#+end_src
+
+* Один рядок коментаря
+
+Текст стискаємо в один рядок, щоб гілка читалась як перелік. Номер (~order_id~) =Figma= віддає рядком,
+тож виводимо його без лапок.
+
+#+begin_src rust :noweb-ref Визначення
+  fn line(comment: &serde_json::Value) -> String {
+      comment["message"].as_str().unwrap().split_whitespace().collect::<Vec<_>>().join(" ")
+  }
+
+  fn number(comment: &serde_json::Value) -> String {
+      comment["order_id"].to_string().trim_matches('"').to_string()
+  }
+#+end_src
+
+* Дія
+
+Кореневими вважаємо коментарі без ~parent_id~ (він порожній або відсутній). Корені впорядковуємо за датою
+створення, відповіді — так само всередині гілки.
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+  use crate::tools;
+#+end_src
+
+#+begin_src rust :noweb-ref Дії
+  let file = tools::file_key(arguments);
+  let node_filter = arguments["node_id"].as_str();
+
+  tools::reply(
+      client::comments(http, &file, tools::refresh(arguments)).await.map(|body| {
+          let all = body["comments"].as_array().unwrap();
+
+          let mut roots: Vec<&serde_json::Value> = all
+              .iter()
+              .filter(|c| c["parent_id"].as_str().is_none_or(|parent| parent.is_empty()))
+              .filter(|c| node_filter.is_none_or(|node| c.pointer("/client_meta/node_id").and_then(|id| id.as_str()) == Some(node)))
+              .collect();
+          roots.sort_by_key(|c| c["created_at"].as_str().unwrap().to_string());
+
+          let mut lines = Vec::new();
+          for root in roots {
+              lines.push(format!(
+                  "#{} {} {} @{}: {}",
+                  number(root),
+                  &root["created_at"].as_str().unwrap()[..10],
+                  if root["resolved_at"].is_null() { "відкрито" } else { "закрито" },
+                  root.pointer("/client_meta/node_id").and_then(|id| id.as_str()).unwrap_or("-"),
+                  line(root),
+              ));
+
+              let mut replies: Vec<&serde_json::Value> = all.iter().filter(|c| c["parent_id"] == root["id"]).collect();
+              replies.sort_by_key(|c| c["created_at"].as_str().unwrap().to_string());
+              for reply in replies {
+                  lines.push(format!("  ↳ {}", line(reply)));
+              }
+          }
+
+          if lines.is_empty() { "Коментарів не знайдено.".to_string() } else { lines.join("\n") }
+      })
+  )
+#+end_src

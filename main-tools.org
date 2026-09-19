@@ -1,0 +1,161 @@
+#+title: Реєстр інструментів
+
+Кожен інструмент реалізовано в окремому самодостатньому org-файлі зі своїм ~run~ (див. [[file:main-tool-outline.org][~outline~]],
+[[file:main-tool-texts.org][~texts~]], [[file:main-tool-comments.org][~comments~]]). Оскільки noweb-посилання не резолвяться між org-файлами, спільні для всіх
+інструментів частини — оголошення підмодуля, опис для ~tools/list~ і диспетчеризація виклику за назвою —
+зведені тут, в одному файлі.
+
+Усі інструменти читають дані з =Figma= лише текстом: скриншоти до реєстру не входять, бо всі дані,
+потрібні для аналізу макетів, є в текстових шарах і структурі вузлів.
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/tools/mod.rs
+  <<Декларації>>
+
+  pub fn list() -> serde_json::Value {
+      serde_json::json!([
+          <<Tools:Опис>>
+      ])
+  }
+
+  pub async fn call(http: &reqwest::Client, name: &str, arguments: &serde_json::Value) -> serde_json::Value {
+      match name {
+          <<Tools:Виклик>>
+      }
+  }
+
+  <<Визначення>>
+#+end_src
+
+* Спільні аргументи
+
+Усі інструменти приймають необов'язкові ~file~ (ключ файлу; без нього береться ~FIGMA_FILE~) і ~refresh~
+(пропустити кеш і запитати =Figma= наново). Інструменти для вузлів приймають ще обов'язковий перелік
+~ids~.
+
+#+begin_src rust :noweb-ref Визначення
+  pub fn file_key(arguments: &serde_json::Value) -> String {
+      match arguments["file"].as_str() {
+          Some(file) => file.to_string(),
+          None => std::env::var("FIGMA_FILE").unwrap(),
+      }
+  }
+
+  pub fn node_ids(arguments: &serde_json::Value) -> Vec<String> {
+      arguments["ids"].as_array().unwrap().iter().map(|id| id.as_str().unwrap().to_string()).collect()
+  }
+
+  pub fn refresh(arguments: &serde_json::Value) -> bool {
+      arguments["refresh"].as_bool().unwrap_or(false)
+  }
+#+end_src
+
+* Відповідь інструмента
+
+Успіх і невдача передаються однаково — текстом, а ознака ~isError~ каже клієнтові, що саме це. Причина
+невдачі (вичерпаний ліміт, ~403~) так доходить до моделі, а не губиться.
+
+#+begin_src rust :noweb-ref Визначення
+  pub fn reply(result: Result<String, String>) -> serde_json::Value {
+      match result {
+          Ok(text) => serde_json::json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+          Err(text) => serde_json::json!({ "content": [{ "type": "text", "text": text }], "isError": true }),
+      }
+  }
+#+end_src
+
+* Інструмент ~outline~
+
+Реалізація — в [[file:main-tool-outline.org][~main-tool-outline.org~]] (тангл таргета ~src/tools/outline.rs~).
+
+#+begin_src rust :noweb-ref Декларації
+  mod outline;
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
+  {
+      "name": "outline",
+      "description": "Структура вузлів Figma: id, тип і назва кожного вузла піддерева. Один виклик Figma на весь перелік ids.",
+      "inputSchema": {
+          "type": "object",
+          "properties": {
+              "ids": { "type": "array", "items": { "type": "string" }, "description": "id вузлів, напр. [\"979:3\"]" },
+              "depth": { "type": "number", "description": "Скільки рівнів показати нижче кожного вузла, за замовчуванням 2" },
+              "file": { "type": "string", "description": "Ключ файлу; без нього береться FIGMA_FILE" },
+              "refresh": { "type": "boolean", "description": "Пропустити кеш і запитати Figma наново" }
+          },
+          "required": ["ids"],
+          "additionalProperties": false
+      }
+  }
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Виклик
+  "outline" => outline::run(http, arguments).await
+#+end_src
+
+* Інструмент ~texts~
+
+Реалізація — в [[file:main-tool-texts.org][~main-tool-texts.org~]] (тангл таргета ~src/tools/texts.rs~).
+
+#+begin_src rust :noweb-ref Декларації
+  mod texts;
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
+  {
+      "name": "texts",
+      "description": "Текстові шари вузлів Figma, згруповані за рядками екрана (зверху вниз, зліва направо): фільтри, заголовки колонок, кнопки. Один виклик Figma на весь перелік ids.",
+      "inputSchema": {
+          "type": "object",
+          "properties": {
+              "ids": { "type": "array", "items": { "type": "string" }, "description": "id вузлів (екранів), напр. [\"979:109\", \"980:310\"]" },
+              "file": { "type": "string", "description": "Ключ файлу; без нього береться FIGMA_FILE" },
+              "refresh": { "type": "boolean", "description": "Пропустити кеш і запитати Figma наново" }
+          },
+          "required": ["ids"],
+          "additionalProperties": false
+      }
+  }
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Виклик
+  "texts" => texts::run(http, arguments).await
+#+end_src
+
+* Інструмент ~comments~
+
+Реалізація — в [[file:main-tool-comments.org][~main-tool-comments.org~]] (тангл таргета ~src/tools/comments.rs~).
+
+#+begin_src rust :noweb-ref Декларації
+  mod comments;
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Опис
+  {
+      "name": "comments",
+      "description": "Коментарі файлу Figma гілками: номер, дата, стан, вузол і текст, під кожним — відповіді. Необов'язковий node_id лишає лише коментарі, прив'язані до цього вузла.",
+      "inputSchema": {
+          "type": "object",
+          "properties": {
+              "node_id": { "type": "string", "description": "Лише коментарі, прив'язані до цього вузла" },
+              "file": { "type": "string", "description": "Ключ файлу; без нього береться FIGMA_FILE" },
+              "refresh": { "type": "boolean", "description": "Пропустити кеш і запитати Figma наново" }
+          },
+          "additionalProperties": false
+      }
+  }
+#+end_src
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Виклик
+  "comments" => comments::run(http, arguments).await
+#+end_src
+
+* Невідомий інструмент
+
+Останній варіант у переліку, тому без коми після нього (~noweb-sep~ додає кому лише між елементами).
+
+#+begin_src rust :noweb-sep ",\n" :noweb-ref Tools:Виклик
+  _ => reply(Err(format!("Невідомий інструмент: {}", name)))
+#+end_src

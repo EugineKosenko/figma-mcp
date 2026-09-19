@@ -1,0 +1,149 @@
+#+title: Спільний клієнт =Figma=
+
+Функції для звернення до =Figma rest api=, спільні для всіх інструментів (див. [[file:main-tools.org][~main-tools.org~]]): жоден
+інструмент не формує =http=-запит напряму. Клієнт зводить докупи те, що показала [[root:spcfctn/code/figma-mcp.md][стрес-проба лімітів]]:
+бюджет викликів мізерний, тому кожна відповідь кешується на диску, а вичерпаний ліміт (~429~)
+перетворюється на зрозуміле повідомлення, а не на крах.
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/client.rs
+  <<Декларації>>
+
+  <<Визначення>>
+#+end_src
+
+* Базова адреса
+
+#+begin_src rust :noweb-ref Визначення
+  const API: &str = "https://api.figma.com/v1";
+#+end_src
+
+* Кеш на диску
+
+Ключ кешу — відбиток адреси запиту. Стандартний ~DefaultHasher~ не гарантує однакового результату між
+версіями ~Rust~, а промах кешу коштує виклику з обмеженого бюджету, тож відбиток рахуємо власним,
+стабільним алгоритмом =fnv-1a=. Каталог береться зі змінної ~FIGMA_CACHE~, а без неї — ~figma-mcp~ у
+тимчасовому каталозі системи.
+
+#+begin_src rust :noweb-ref Декларації
+  use std::env;
+  use std::path::PathBuf;
+#+end_src
+
+#+begin_src rust :noweb-ref Визначення
+  fn fingerprint(text: &str) -> u64 {
+      text.bytes().fold(0xcbf29ce484222325, |hash, byte| (hash ^ byte as u64).wrapping_mul(0x100000001b3))
+  }
+
+  fn cache_path(url: &str) -> PathBuf {
+      let dir = match env::var("FIGMA_CACHE") {
+          Ok(dir) => PathBuf::from(dir),
+          Err(_) => env::temp_dir().join("figma-mcp"),
+      };
+
+      dir.join(format!("{:016x}.json", fingerprint(url)))
+  }
+#+end_src
+
+* Вичерпаний ліміт
+
+Відповідь ~429~ несе ~Retry-After~ (секунди до наступної спроби), ~X-Figma-Plan-Tier~ і
+~X-Figma-Rate-Limit-Type~ (~low~ для місць Viewer і Collab, ~high~ для Full і Dev). Заголовок може бути
+відсутнім, тому запасне значення тут виправдане — це лише текст повідомлення.
+
+#+begin_src rust :noweb-ref Визначення
+  fn header(response: &reqwest::Response, name: &str) -> String {
+      match response.headers().get(name) {
+          Some(value) => value.to_str().unwrap().to_string(),
+          None => "?".to_string(),
+      }
+  }
+#+end_src
+
+* Запит із кешем
+
+Успішну відповідь пишемо в кеш; наступний запит тієї самої адреси читає її з диска, доки не задано
+~refresh~. Помилки (~429~ та інші) в кеш не потрапляють.
+
+#+begin_src rust :noweb-ref Визначення
+  async fn get(http: &reqwest::Client, path: &str, refresh: bool) -> Result<serde_json::Value, String> {
+      let url = format!("{}{}", API, path);
+      let cache = cache_path(&url);
+
+      if !refresh {
+          if let Ok(text) = std::fs::read_to_string(&cache) {
+              return Ok(serde_json::from_str(&text).unwrap());
+          }
+      }
+
+      let response = http
+          .get(&url)
+          .header("X-Figma-Token", env::var("FIGMA_TOKEN").unwrap())
+          .send()
+          .await.unwrap();
+      let status = response.status();
+
+      if status.as_u16() == 429 {
+          let seconds = header(&response, "retry-after").parse::<u64>().unwrap_or(0);
+          return Err(format!(
+              "Ліміт Figma вичерпано (429) для {}: повторіть приблизно через {} год. План: {}, тип ліміту: {}.",
+              path,
+              seconds / 3600,
+              header(&response, "x-figma-plan-tier"),
+              header(&response, "x-figma-rate-limit-type"),
+          ));
+      }
+
+      let body = response.text().await.unwrap();
+
+      if !status.is_success() {
+          return Err(format!("Figma відповів {} для {}: {}", status, path, body));
+      }
+
+      std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+      std::fs::write(&cache, &body).unwrap();
+
+      Ok(serde_json::from_str(&body).unwrap())
+  }
+#+end_src
+
+* Вузли файлу
+
+~GET /files/{key}?ids=...~ повертає піддерева всіх перелічених вузлів *одним* викликом — на відміну від
+~GET /files/{key}/nodes~, який має окремий вичерпаний відсік ліміту. Тому всі потрібні вузли беремо
+разом, а не по одному.
+
+#+begin_src rust :noweb-ref Визначення
+  pub async fn file_nodes(http: &reqwest::Client, file: &str, ids: &[String], refresh: bool) -> Result<serde_json::Value, String> {
+      get(http, &format!("/files/{}?ids={}", file, ids.join(",")), refresh).await
+  }
+#+end_src
+
+Відповідь містить і шлях від кореня до вузлів, тому самі вузли шукаємо в дереві за ~id~; всередині
+знайденого вузла далі не спускаємось.
+
+#+begin_src rust :noweb-ref Визначення
+  pub fn find<'a>(node: &'a serde_json::Value, ids: &[String], found: &mut Vec<&'a serde_json::Value>) {
+      if ids.iter().any(|id| node["id"] == *id) {
+          found.push(node);
+          return;
+      }
+
+      if let Some(children) = node["children"].as_array() {
+          for child in children {
+              find(child, ids, found);
+          }
+      }
+  }
+#+end_src
+
+* Коментарі файлу
+
+Це ендпойнт іншого рівня лімітів, ніж читання файлів, тому не зачіпає їхній бюджет.
+
+#+begin_src rust :noweb-ref Визначення
+  pub async fn comments(http: &reqwest::Client, file: &str, refresh: bool) -> Result<serde_json::Value, String> {
+      get(http, &format!("/files/{}/comments", file), refresh).await
+  }
+#+end_src

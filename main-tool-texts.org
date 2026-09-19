@@ -1,0 +1,108 @@
+#+title: Інструмент ~texts~
+
+Повертає текстові шари екрана, згруповані за рядками: це саме те, що в макеті задає порядок фільтрів,
+колонок і кнопок (див. аналіз у ~spcfctn/ui~ проєкту ~kylada~). Кожен текстовий шар має координати
+(~absoluteBoundingBox~), тому рядок екрана — це сукупність шарів, чиї вертикальні позиції відрізняються
+не більше ніж на 25 пікселів від першого шару рядка. Опис для ~tools/list~ і диспетчеризація — в
+[[file:main-tools.org][~main-tools.org~]].
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/tools/texts.rs
+  <<Декларації>>
+
+  <<Визначення>>
+
+  pub async fn run(http: &reqwest::Client, arguments: &serde_json::Value) -> serde_json::Value {
+      <<Дії>>
+  }
+#+end_src
+
+* Збір текстових шарів
+
+Позиції рахуємо від верхнього лівого кута самого екрана, щоб числа не залежали від того, де екран лежить
+на полотні.
+
+#+begin_src rust :noweb-ref Визначення
+  fn collect(node: &serde_json::Value, top: f64, left: f64, texts: &mut Vec<(i64, i64, String)>) {
+      if node["type"] == "TEXT" {
+          let bounds = &node["absoluteBoundingBox"];
+          texts.push((
+              (bounds["y"].as_f64().unwrap() - top) as i64,
+              (bounds["x"].as_f64().unwrap() - left) as i64,
+              node["characters"].as_str().unwrap().replace('\n', " "),
+          ));
+      }
+
+      if let Some(children) = node["children"].as_array() {
+          for child in children {
+              collect(child, top, left, texts);
+          }
+      }
+  }
+#+end_src
+
+* Групування за рядками
+
+Шари сортуємо за вертикаллю, а потім за горизонталлю. Новий рядок починається, коли шар нижчий за початок
+поточного рядка більше ніж на 25 пікселів; усередині рядка шари йдуть зліва направо.
+
+#+begin_src rust :noweb-ref Визначення
+  fn rows(mut texts: Vec<(i64, i64, String)>) -> Vec<String> {
+      texts.sort();
+
+      let mut rows: Vec<(i64, Vec<(i64, String)>)> = Vec::new();
+      for (y, x, text) in texts {
+          let same = rows.last().is_some_and(|(start, _)| y - *start <= 25);
+
+          if same {
+              rows.last_mut().unwrap().1.push((x, text));
+          } else {
+              rows.push((y, vec![(x, text)]));
+          }
+      }
+
+      rows.into_iter()
+          .map(|(y, mut items)| {
+              items.sort();
+              format!("y={:<4} {}", y, items.into_iter().map(|(_, text)| text).collect::<Vec<_>>().join(" | "))
+          })
+          .collect()
+  }
+#+end_src
+
+* Дія
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+  use crate::tools;
+#+end_src
+
+#+begin_src rust :noweb-ref Дії
+  let file = tools::file_key(arguments);
+  let ids = tools::node_ids(arguments);
+
+  tools::reply(
+      client::file_nodes(http, &file, &ids, tools::refresh(arguments)).await.map(|body| {
+          let mut found = Vec::new();
+          client::find(&body["document"], &ids, &mut found);
+
+          let mut blocks = Vec::new();
+          for node in found {
+              let bounds = &node["absoluteBoundingBox"];
+              let mut texts = Vec::new();
+              collect(node, bounds["y"].as_f64().unwrap(), bounds["x"].as_f64().unwrap(), &mut texts);
+
+              blocks.push(format!(
+                  "== {} ({}): {} текстів\n{}",
+                  node["name"].as_str().unwrap(),
+                  node["id"].as_str().unwrap(),
+                  texts.len(),
+                  rows(texts).join("\n"),
+              ));
+          }
+
+          if blocks.is_empty() { "Вузли не знайдено.".to_string() } else { blocks.join("\n\n") }
+      })
+  )
+#+end_src

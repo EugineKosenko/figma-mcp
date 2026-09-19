@@ -1,0 +1,69 @@
+#+title: Інструмент ~outline~
+
+Показує структуру вузлів: у кожному рядку ~id~, тип і назва, з відступом за рівнем. Це найдешевший спосіб
+зорієнтуватися в файлі: замість сотень кілобайтів метаданих — кілька десятків рядків тексту. Опис для
+~tools/list~ і диспетчеризація — в [[file:main-tools.org][~main-tools.org~]].
+
+* Модуль
+
+#+begin_src rust :noweb yes :mkdirp yes :tangle src/tools/outline.rs
+  <<Декларації>>
+
+  <<Визначення>>
+
+  pub async fn run(http: &reqwest::Client, arguments: &serde_json::Value) -> serde_json::Value {
+      <<Дії>>
+  }
+#+end_src
+
+* Обхід піддерева
+
+Глибина рахується від самого вузла: ~0~ — лише він, ~2~ — він, його діти й онуки. Для ~GET file~ параметр
+~depth~ рахується від кореня документа, тому обмеження застосовуємо тут, а не в запиті.
+
+#+begin_src rust :noweb-ref Визначення
+  fn walk(node: &serde_json::Value, level: u64, depth: u64, lines: &mut Vec<String>) {
+      lines.push(format!(
+          "{}{} {} {}",
+          "  ".repeat(level as usize),
+          node["id"].as_str().unwrap(),
+          node["type"].as_str().unwrap(),
+          node["name"].as_str().unwrap(),
+      ));
+
+      if level < depth {
+          if let Some(children) = node["children"].as_array() {
+              for child in children {
+                  walk(child, level + 1, depth, lines);
+              }
+          }
+      }
+  }
+#+end_src
+
+* Дія
+
+#+begin_src rust :noweb-ref Декларації
+  use crate::client;
+  use crate::tools;
+#+end_src
+
+#+begin_src rust :noweb-ref Дії
+  let file = tools::file_key(arguments);
+  let ids = tools::node_ids(arguments);
+  let depth = arguments["depth"].as_u64().unwrap_or(2);
+
+  tools::reply(
+      client::file_nodes(http, &file, &ids, tools::refresh(arguments)).await.map(|body| {
+          let mut found = Vec::new();
+          client::find(&body["document"], &ids, &mut found);
+
+          let mut lines = Vec::new();
+          for node in found {
+              walk(node, 0, depth, &mut lines);
+          }
+
+          if lines.is_empty() { "Вузли не знайдено.".to_string() } else { lines.join("\n") }
+      })
+  )
+#+end_src
