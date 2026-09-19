@@ -1,10 +1,12 @@
 #+title: Інструмент ~comments~
 
-Повертає коментарі файлу гілками: кореневий коментар із номером, датою, станом (відкритий чи закритий) і
-вузлом, до якого його прив'язано, а під ним — відповіді (~parent_id~ відповіді дорівнює ~id~
-кореня). Коментар прив'язаний до вузла верхнього рівня, а не до екрана, — розкладання по екранах за
-координатами (~client_meta.node_offset~) залишається окремою задачею. Ім'я автора не виводиться. Опис для
-~tools/list~ і диспетчеризація — в [[file:main-tools.org][~main-tools.org~]].
+Повертає коментарі файлу гілками: кореневий коментар із номером, датою, станом (відкритий чи закритий),
+вузлом, до якого його прив'язано, і зсувом у цьому вузлі, а під ним — відповіді (~parent_id~ відповіді
+дорівнює ~id~ кореня). Коментар прив'язаний до вузла верхнього рівня (секції чи сторінки), а не до
+екрана; екран визначає позиція всередині вузла — зсув ~client_meta.node_offset~. Тому зсув виводиться
+разом із вузлом, а сервер сам по екранах коментарі не розкладає: це робить клієнт за геометрією вузлів
+(наприклад, за експортом ~.fig~). Ім'я автора не виводиться. Опис для ~tools/list~ і диспетчеризація — в
+[[file:main-tools.org][~main-tools.org~]].
 
 * Модуль
 
@@ -15,6 +17,13 @@
 
   pub async fn run(http: &reqwest::Client, arguments: &serde_json::Value) -> serde_json::Value {
       <<Дії>>
+  }
+
+  #[cfg(test)]
+  mod tests {
+      use super::*;
+
+      <<Тести>>
   }
 #+end_src
 
@@ -30,6 +39,27 @@
 
   fn number(comment: &serde_json::Value) -> String {
       comment["order_id"].to_string().trim_matches('"').to_string()
+  }
+#+end_src
+
+* Прив'язка коментаря
+
+Прив'язка — це вузол (~client_meta.node_id~) і зсув (~client_meta.node_offset~) відносно верхнього лівого
+кута цього вузла. Абсолютну позицію на полотні дає початок вузла плюс зсув, і за нею клієнт знаходить
+екран. Виводимо у вигляді ~@вузол x=… y=…~, щоб рядок легко розбирався й людиною, і моделлю. Зсув може
+бути дробовим і від'ємним. Якщо зсуву в коментаря немає, виводимо лише вузол, а якщо немає й вузла —
+~@-~.
+
+#+begin_src rust :noweb-ref Визначення
+  fn anchor(comment: &serde_json::Value) -> String {
+      let node = comment.pointer("/client_meta/node_id").and_then(|id| id.as_str()).unwrap_or("-");
+      let x = comment.pointer("/client_meta/node_offset/x").and_then(|v| v.as_f64());
+      let y = comment.pointer("/client_meta/node_offset/y").and_then(|v| v.as_f64());
+
+      match (x, y) {
+          (Some(x), Some(y)) => format!("@{} x={} y={}", node, x, y),
+          _ => format!("@{}", node),
+      }
   }
 #+end_src
 
@@ -64,11 +94,11 @@
           let mut lines = Vec::new();
           for root in roots {
               lines.push(format!(
-                  "#{} {} {} @{}: {}",
+                  "#{} {} {} {}: {}",
                   number(root),
                   &root["created_at"].as_str().unwrap()[..10],
                   if root["resolved_at"].is_null() { "відкрито" } else { "закрито" },
-                  root.pointer("/client_meta/node_id").and_then(|id| id.as_str()).unwrap_or("-"),
+                  anchor(root),
                   line(root),
               ));
 
@@ -82,4 +112,28 @@
           if lines.is_empty() { "Коментарів не знайдено.".to_string() } else { lines.join("\n") }
       })
   )
+#+end_src
+
+* Перевірки
+
+Розбір прив'язки не потребує мережі, тож перевіряється звичайними тестами.
+
+#+begin_src rust :noweb-ref Тести
+  #[test]
+  fn anchor_with_offset() {
+      let comment = serde_json::json!({ "client_meta": { "node_id": "979:3", "node_offset": { "x": 500, "y": 5471 } } });
+      assert_eq!(anchor(&comment), "@979:3 x=500 y=5471");
+  }
+
+  #[test]
+  fn anchor_fractional_and_negative_offset() {
+      let comment = serde_json::json!({ "client_meta": { "node_id": "0:1", "node_offset": { "x": 12.5, "y": -3 } } });
+      assert_eq!(anchor(&comment), "@0:1 x=12.5 y=-3");
+  }
+
+  #[test]
+  fn anchor_without_offset_or_node() {
+      assert_eq!(anchor(&serde_json::json!({ "client_meta": { "node_id": "979:3" } })), "@979:3");
+      assert_eq!(anchor(&serde_json::json!({})), "@-");
+  }
 #+end_src

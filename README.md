@@ -36,8 +36,10 @@ read a wireframe: filters, columns, buttons and their order. There are no screen
   optionally `depth`).
 - **texts** — the text layers of the nodes, grouped by screen rows (top to bottom, left to right):
   filters, column headers, buttons (`ids`).
-- **comments** — the comments of the file as threads: number, date, state, node and text, replies below
-  each one (optionally `node_id`). The author name is not printed.
+- **comments** — the comments of the file as threads: number, date, state, node with the pin offset
+  (`@979:3 x=500 y=5471`) and text, replies below each one (optionally `node_id`). The offset is the
+  position of the comment inside the node, so a client that knows the geometry of the nodes can find the
+  screen a comment belongs to. The author name is not printed.
 
 All tools accept an optional `file` and `refresh`. `file` is the file key or the full file URL copied
 from the browser (the key is taken from the segment after `/design/`, `/file/` or `/board/`); without it
