@@ -20,8 +20,10 @@ fn walk(node: &serde_json::Value, level: u64, depth: u64, lines: &mut Vec<String
 }
 
 pub async fn run(http: &reqwest::Client, arguments: &serde_json::Value) -> serde_json::Value {
-    let file = tools::file_key(arguments);
-    let ids = tools::node_ids(arguments);
+    let (file, ids) = match tools::file_and_ids(arguments) {
+        Ok(pair) => pair,
+        Err(message) => return tools::reply(Err(message)),
+    };
     let depth = arguments["depth"].as_u64().unwrap_or(2);
     
     tools::reply(

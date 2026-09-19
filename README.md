@@ -39,8 +39,11 @@ read a wireframe: filters, columns, buttons and their order. There are no screen
 - **comments** — the comments of the file as threads: number, date, state, node and text, replies below
   each one (optionally `node_id`). The author name is not printed.
 
-All tools accept an optional `file` (the file key; `FIGMA_FILE` by default) and `refresh` (skip the cache
-and ask Figma again).
+All tools accept an optional `file` and `refresh`. `file` is the file key or the full file URL copied
+from the browser (the key is taken from the segment after `/design/`, `/file/` or `/board/`); without it
+`FIGMA_FILE` is used, and if that is not set either, the tool answers with a clear error. `refresh` skips
+the cache and asks Figma again. Node ids may be given in the dash form of a browser URL (`979-3`); they
+are converted to the API form (`979:3`).
 
 ## Source layout
 
@@ -75,17 +78,19 @@ FIGMA_FILE=
 #FIGMA_CACHE=
 ```
 
-`FIGMA_FILE` is the default file key (the segment after `/design/` in the file URL). `FIGMA_CACHE`
-overrides the cache directory, which is `figma-mcp` in the system temporary directory by default.
+`FIGMA_FILE` is optional: a default file (key or URL) for calls that do not name one. One server serves
+any number of files, so the file can also be given in every call. `FIGMA_CACHE` overrides the cache
+directory, which is `figma-mcp` in the system temporary directory by default.
 
 ## Registering with Claude Code
 
 ```sh
 claude mcp add --scope user figma \
   -e FIGMA_TOKEN=<your personal access token> \
-  -e FIGMA_FILE=<default file key> \
   -- /path/to/figma-mcp/target/release/figma-mcp
 ```
+
+Add `-e FIGMA_FILE=<default file key>` if you mostly work with one file.
 
 ## License
 

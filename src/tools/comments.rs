@@ -10,8 +10,11 @@ fn number(comment: &serde_json::Value) -> String {
 }
 
 pub async fn run(http: &reqwest::Client, arguments: &serde_json::Value) -> serde_json::Value {
-    let file = tools::file_key(arguments);
-    let node_filter = arguments["node_id"].as_str();
+    let file = match tools::file_key(arguments) {
+        Ok(file) => file,
+        Err(message) => return tools::reply(Err(message)),
+    };
+    let node_filter = arguments["node_id"].as_str().map(tools::node_id);
     
     tools::reply(
         client::comments(http, &file, tools::refresh(arguments)).await.map(|body| {
@@ -20,7 +23,7 @@ pub async fn run(http: &reqwest::Client, arguments: &serde_json::Value) -> serde
             let mut roots: Vec<&serde_json::Value> = all
                 .iter()
                 .filter(|c| c["parent_id"].as_str().is_none_or(|parent| parent.is_empty()))
-                .filter(|c| node_filter.is_none_or(|node| c.pointer("/client_meta/node_id").and_then(|id| id.as_str()) == Some(node)))
+                .filter(|c| node_filter.as_ref().is_none_or(|node| c.pointer("/client_meta/node_id").and_then(|id| id.as_str()) == Some(node.as_str())))
                 .collect();
             roots.sort_by_key(|c| c["created_at"].as_str().unwrap().to_string());
     

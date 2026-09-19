@@ -40,8 +40,10 @@ fn rows(mut texts: Vec<(i64, i64, String)>) -> Vec<String> {
 }
 
 pub async fn run(http: &reqwest::Client, arguments: &serde_json::Value) -> serde_json::Value {
-    let file = tools::file_key(arguments);
-    let ids = tools::node_ids(arguments);
+    let (file, ids) = match tools::file_and_ids(arguments) {
+        Ok(pair) => pair,
+        Err(message) => return tools::reply(Err(message)),
+    };
     
     tools::reply(
         client::file_nodes(http, &file, &ids, tools::refresh(arguments)).await.map(|body| {

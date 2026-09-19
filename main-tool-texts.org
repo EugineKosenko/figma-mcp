@@ -79,8 +79,10 @@
 #+end_src
 
 #+begin_src rust :noweb-ref Дії
-  let file = tools::file_key(arguments);
-  let ids = tools::node_ids(arguments);
+  let (file, ids) = match tools::file_and_ids(arguments) {
+      Ok(pair) => pair,
+      Err(message) => return tools::reply(Err(message)),
+  };
 
   tools::reply(
       client::file_nodes(http, &file, &ids, tools::refresh(arguments)).await.map(|body| {
